@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "fastcdc",
+    srcs = ["fastcdc.go"],
+    importpath = "github.com/buildbuddy-io/fastcdc2020/fastcdc",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "fastcdc_test",
+    srcs = ["fastcdc_test.go"],
+    data = glob(["testdata/**"]),
+    embed = [":fastcdc"],
+)
