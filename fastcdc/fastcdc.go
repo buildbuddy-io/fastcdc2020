@@ -168,7 +168,7 @@ type Chunker struct {
 	reader io.Reader
 
 	buf       []byte
-	bufCursor int
+	bufStart  int
 	bufEnd    int
 	streamPos int
 	readerEOF bool
@@ -226,8 +226,6 @@ func NewChunker(rd io.Reader, averageSize int, opts ...Option) (*Chunker, error)
 		maskLargeShifted: maskL << 1,
 		reader:           rd,
 		buf:              make([]byte, o.bufSize),
-		bufCursor:        o.bufSize,
-		bufEnd:           o.bufSize,
 		gear:             seedGear,
 		gearShifted:      seedGearShifted,
 	}
@@ -240,16 +238,12 @@ func (c *Chunker) Reset(rd io.Reader) {
 	c.reader = rd
 	c.streamPos = 0
 	c.readerEOF = false
-
-	// bufCursor indicates the position to read from.
-	// placing it at the end means the buffer is empty
-	// and needs to be filled.
-	c.bufCursor = len(c.buf)
-	c.bufEnd = len(c.buf)
+	c.bufStart = 0
+	c.bufEnd = 0
 }
 
 func (c *Chunker) fillBuffer() error {
-	availableToRead := c.bufEnd - c.bufCursor
+	availableToRead := c.bufEnd - c.bufStart
 
 	// We know that the maximum chunk we can produce
 	// is c.maxSize, so if we have at least that much
@@ -258,8 +252,8 @@ func (c *Chunker) fillBuffer() error {
 		return nil
 	}
 
-	_ = copy(c.buf[:availableToRead], c.buf[c.bufCursor:])
-	c.bufCursor = 0
+	_ = copy(c.buf[:availableToRead], c.buf[c.bufStart:])
+	c.bufStart = 0
 
 	if c.readerEOF {
 		c.bufEnd = availableToRead
@@ -272,7 +266,11 @@ func (c *Chunker) fillBuffer() error {
 		c.readerEOF = true
 		return nil
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	c.bufEnd = len(c.buf)
+	return nil
 }
 
 // Next returns the next chunk, or io.EOF when the stream is exhausted.
@@ -285,16 +283,16 @@ func (c *Chunker) Next() (Chunk, error) {
 		return Chunk{}, io.EOF
 	}
 
-	length, fp := c.cut(c.buf[c.bufCursor:c.bufEnd])
+	length, fp := c.cut(c.buf[c.bufStart:c.bufEnd])
 
 	chunk := Chunk{
 		Offset:      c.streamPos,
 		Length:      length,
-		Data:        c.buf[c.bufCursor : c.bufCursor+length],
+		Data:        c.buf[c.bufStart : c.bufStart+length],
 		Fingerprint: fp,
 	}
 
-	c.bufCursor += length
+	c.bufStart += length
 	c.streamPos += length
 
 	return chunk, nil
