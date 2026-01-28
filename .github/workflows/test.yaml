@@ -1,0 +1,52 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bazel-contrib/setup-bazel@0.18.0
+        with:
+          bazelisk-cache: true
+          disk-cache: true
+          repository-cache: true
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: Install gofumpt
+        run: go install mvdan.cc/gofumpt@latest
+
+      - name: Check formatting
+        run: |
+          if [ -n "$(gofumpt -l .)" ]; then
+            echo "Files not formatted with gofumpt:"
+            gofumpt -l .
+            exit 1
+          fi
+
+      - name: Check BUILD files
+        run: bazel run //:gazelle -- -mode=diff
+
+      - name: Check MODULE.bazel.lock
+        run: bazel mod deps --lockfile_mode=update && git diff --exit-code MODULE.bazel.lock
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bazel-contrib/setup-bazel@0.18.0
+        with:
+          bazelisk-cache: true
+          disk-cache: true
+          repository-cache: true
+
+      - name: Test
+        run: bazel test //...
