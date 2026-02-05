@@ -2,11 +2,124 @@ package fastcdc
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"math/rand"
 	"os"
 	"testing"
 )
+
+// Ref: https://github.com/bazelbuild/remote-apis/commit/de5501d284d7792ab9e5469b488ecaba341122a3
+func TestChunker_RemoteAPIsTestVector(t *testing.T) {
+	data, err := os.ReadFile("testdata/SekienAkashita.jpg")
+	if err != nil {
+		t.Skipf("test file not found: %v", err)
+	}
+
+	fullHash := sha256.Sum256(data)
+	expectedFullHash := "d9e749d9367fc908876749d6502eb212fee88c9a94892fb07da5ef3ba8bc39ed"
+	if hex.EncodeToString(fullHash[:]) != expectedFullHash {
+		t.Fatalf("test file hash mismatch: expected %s, got %s", expectedFullHash, hex.EncodeToString(fullHash[:]))
+	}
+
+	type chunkExpect struct {
+		offset      int
+		length      int
+		sha256      string
+		fingerprint uint64
+	}
+
+	testCases := []struct {
+		name     string
+		seed     uint64
+		expected []chunkExpect
+	}{
+		{
+			name: "seed_0",
+			seed: 0,
+			expected: []chunkExpect{
+				{0, 19186, "0f9efa589121d5d9e9e2c4ace91337d77cae866537143f6f15a0ffd525a77c2d", 17583755766661134474},
+				{19186, 19279, "c7c86a165573c16448cda35c9169742e85645af42be22889f8b96b8ee0ec7cb0", 4098594969649699419},
+				{38465, 17354, "bc88521e28a8b4479cdea5f75aa721a24f3a0a7d0be903aa6d505c574e51e89d", 2365586132076908760},
+				{55819, 16387, "4b8dac2652e4685c629d2bb1ae9d4448e676b86f2e67ca0b2fff3d9580184b79", 16009206469796846404},
+				{72206, 19940, "c0a7062da6f2386c28e086ee0cedd5732252741269838773cff1ddb05b2df6ed", 2473608525189754172},
+				{92146, 17320, "7fa5b12134dc75cd2ac8dc60d3a8f3c8d22f0ee9d4cf74a4aa937e2a0d2d79a5", 2504464741100432583},
+			},
+		},
+		{
+			name: "seed_666",
+			seed: 666,
+			expected: []chunkExpect{
+				{0, 17635, "cb3a9d80a3569772d4ed331ca37ab0c862c759897b890fc1aac90a4f2ea3a407", 17021115692437263050},
+				{17635, 17334, "d758c6b7b0b7eef1e996f8ccd17de6c645360b03a26c35541e7581348ac08944", 8231525949846907466},
+				{34969, 19136, "24846aefd89e510594bae3e9d7d5ea5012067601512610fed126a3c57ba993f5", 10944310959829698982},
+				{54105, 17467, "efa785e1fefb49f190e665f72fd246c1442079874508c312196da1fb3040d00b", 13602876513398592944},
+				{71572, 23593, "a2f557bdd8d40d8faada963ad5f91ec54b10ccee7c5ae72754a65137592dc607", 2945079350535657389},
+				{95165, 14301, "e131100b4a7147ccad19dc63c4a2fac1f5d8b644e1373eeb6803825024234efc", 8981594897574481255},
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := []Option{
+				WithMinSize(4096),
+				WithMaxSize(65535),
+				WithNormalization(2),
+			}
+			if tc.seed != 0 {
+				opts = append(opts, WithSeed(tc.seed))
+			}
+
+			chunker, err := NewChunker(bytes.NewReader(data), 16384, opts...)
+			if err != nil {
+				t.Fatalf("failed to create chunker: %v", err)
+			}
+
+			var chunks []chunkExpect
+			for {
+				chunk, err := chunker.Next()
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					t.Fatalf("error reading chunk: %v", err)
+				}
+				chunkHash := sha256.Sum256(chunk.Data)
+				chunks = append(chunks, chunkExpect{
+					offset:      chunk.Offset,
+					length:      chunk.Length,
+					sha256:      hex.EncodeToString(chunkHash[:]),
+					fingerprint: chunk.Fingerprint,
+				})
+			}
+
+			if len(chunks) != len(tc.expected) {
+				t.Errorf("expected %d chunks, got %d", len(tc.expected), len(chunks))
+				for i, c := range chunks {
+					t.Logf("  %d: offset=%d length=%d sha256=%s fingerprint=%d", i, c.offset, c.length, c.sha256, c.fingerprint)
+				}
+				return
+			}
+
+			for i, e := range tc.expected {
+				if chunks[i].offset != e.offset {
+					t.Errorf("chunk %d: expected offset %d, got %d", i, e.offset, chunks[i].offset)
+				}
+				if chunks[i].length != e.length {
+					t.Errorf("chunk %d: expected length %d, got %d", i, e.length, chunks[i].length)
+				}
+				if chunks[i].sha256 != e.sha256 {
+					t.Errorf("chunk %d: expected sha256 %s, got %s", i, e.sha256, chunks[i].sha256)
+				}
+				if chunks[i].fingerprint != e.fingerprint {
+					t.Errorf("chunk %d: expected fingerprint %d, got %d", i, e.fingerprint, chunks[i].fingerprint)
+				}
+			}
+		})
+	}
+}
 
 // Expected values from https://github.com/nlfiedler/fastcdc-rs/blob/master/src/v2020/mod.rs#L903
 func TestChunker_SekienAkashita(t *testing.T) {
